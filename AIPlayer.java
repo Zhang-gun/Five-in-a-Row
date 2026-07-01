@@ -3,140 +3,194 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AI 玩家逻辑类
- * 本类专注于实现人机对弈的计算内核。
- * 主要运用了局部最优的贪心算法 (Greedy Algorithm) 配合自定义的启发式位置评估函数 (Heuristic Evaluation)。
+ * 电脑 AI 逻辑类
+ * 包含简单、中等、困难三种难度。
+ * 其实核心逻辑就是给棋盘上的每个空位打分，分数越高，说明下在那里的价值越大。
  */
 public class AIPlayer {
-    
+
     /**
-     * 简单模式 AI：纯随机落子策略
-     * 遍历整个棋盘收集所有空位坐标，随后利用 Math.random() 在合法空位中随机抽取其一。
-     * 该模式主要供新手练习测试使用。
-     * 
-     * @param model 游戏当前的数据模型
-     * @return 决定的落子坐标
+     * 简单难度：瞎下模式
+     * 做法非常简单粗暴：把棋盘遍历一遍，看到空位就装进 List 里，
+     * 然后用 Math.random() 随便抽一个。
      */
     public Point getEasyMove(GameModel model) {
         int[][] board = model.getBoard();
-        int size = GameModel.BOARD_SIZE;
-        List<Point> emptyPoints = new ArrayList<>();
+        List<Point> availablePoints = new ArrayList<>();
         
-        // 遍历提取全盘空位
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
-                if (board[i][j] == 0) emptyPoints.add(new Point(i, j));
+        // 双层 for 循环遍历整个二维数组
+        for (int i = 0; i < GameModel.BOARD_SIZE; i++) {
+            for (int j = 0; j < GameModel.BOARD_SIZE; j++) {
+                // 只有等于 0（没下过棋的地方）才能加进去
+                if (board[i][j] == 0) {
+                    availablePoints.add(new Point(i, j));
+                }
             }
         }
-        // 防止出现无可落子导致异常的极端情况
-        if (emptyPoints.isEmpty()) return null;
         
-        // 返回随机索引处的坐标
-        return emptyPoints.get((int)(Math.random() * emptyPoints.size()));
+        if (availablePoints.isEmpty()) {
+            return null; // 防错处理，棋盘满了就返回空
+        }
+        
+        // Math.random() 返回 0.0 到 1.0 的小数，乘上总长度后强转为 int，就是随机索引
+        int randomIndex = (int) (Math.random() * availablePoints.size());
+        return availablePoints.get(randomIndex);
     }
 
     /**
-     * 困难模式 AI：贪心算法核心引擎
-     * 算法思想：不对未来步数进行深度博弈树搜索（如极小极大算法），而是将算力集中于对当前局面的单步静态评估。
-     * 对于棋盘上每一个空位，分别计算它对白方（AI自身）的进攻价值和对黑方（玩家）的防守价值。
-     * 将两项价值加和，求出全局战略价值最高的最优解。
-     * 
-     * @param model 游戏当前的数据模型
-     * @return 全局最高收益的落子坐标
+     * 中等难度：只攻不守模式
+     * 逻辑：在这个模式下，电脑眼里只有自己怎么连五子，根本不在乎玩家怎么下。
      */
-    public Point getHardMove(GameModel model) {
-        int maxScore = -1;
-        Point bestPoint = null;
-        int size = GameModel.BOARD_SIZE;
+    public Point getMediumMove(GameModel model) {
+        int bestScore = -1; // 记录找到的最高分，初始给个 -1
+        Point bestMove = null;
         int[][] board = model.getBoard();
 
-        // 嵌套循环遍历 15x15 棋盘
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
+        for (int i = 0; i < GameModel.BOARD_SIZE; i++) {
+            for (int j = 0; j < GameModel.BOARD_SIZE; j++) {
                 if (board[i][j] == 0) { 
-                    // scoreAttack: 如果AI在此落子，能促成己方连珠的评分收益
-                    int scoreAttack = evaluatePosition(board, size, i, j, 2); 
-                    // scoreDefend: 如果玩家在此落子，能促成敌方连珠的评分威胁（防守收益）
-                    int scoreDefend = evaluatePosition(board, size, i, j, 1); 
-                    // 综合该点的攻防总价值
-                    int score = scoreAttack + scoreDefend;
+                    // 这里传 2 进去，意思是：“如果把白子下在这里，能得多少分？”
+                    int attackScore = evaluatePoint(board, i, j, 2); 
                     
-                    // 贪心策略：只记录并保留得分最高的位置
-                    if (score > maxScore) {
-                        maxScore = score;
+                    // 如果这个点的得分比之前的最高分还要高，就更新最高分和最佳坐标
+                    if (attackScore > bestScore) {
+                        bestScore = attackScore;
+                        bestMove = new Point(i, j);
+                    }
+                }
+            }
+        }
+        
+        // 如果实在找不到好地方，就调随机模式随便走一步
+        if (bestMove == null) {
+            return getEasyMove(model);
+        }
+        return bestMove;
+    }
+
+    /**
+     * 困难难度：攻守兼备模式 (也就是俗称的贪心算法)
+     * 逻辑：不仅要算自己（白棋）下这里的得分，还要假想如果玩家（黑棋）下这里，会有多大威胁。
+     * 把这两者的分加起来，得出的就是这步棋的“综合战略价值”。
+     */
+    public Point getHardMove(GameModel model) {
+        int maxTotalScore = -1;
+        Point bestPoint = null;
+        int[][] board = model.getBoard();
+
+        for (int i = 0; i < GameModel.BOARD_SIZE; i++) {
+            for (int j = 0; j < GameModel.BOARD_SIZE; j++) {
+                if (board[i][j] == 0) { 
+                    // 1. 进攻分：算算自己连珠的好处
+                    int myScore = evaluatePoint(board, i, j, 2); 
+                    
+                    // 2. 防守分：换位思考，算算玩家下在这里的好处
+                    // 如果玩家下这里是个活四，那这个分数就会极高，逼着电脑必须下这里去堵他！
+                    int enemyScore = evaluatePoint(board, i, j, 1); 
+                    
+                    // 两者相加
+                    int totalScore = myScore + enemyScore;
+                    
+                    if (totalScore > maxTotalScore) {
+                        maxTotalScore = totalScore;
                         bestPoint = new Point(i, j);
                     }
                 }
             }
         }
-        // 若棋盘已满或出现未预料的情况，回退至随机落子处理
-        return bestPoint != null ? bestPoint : getEasyMove(model);
+        
+        if (bestPoint == null) {
+            return getEasyMove(model);
+        }
+        return bestPoint;
     }
 
     /**
-     * 启发式打分函数（权重评估系统）
-     * 原理：模拟在指定坐标(x,y)落下指定颜色(color)的棋子后，向 4 个方向探测所能构成的棋型。
-     * 重点不仅在于计算"连续同色棋子的数量 (count)"，更在于识别"该连线的两端是否被堵死 (block)"。
-     * 
-     * @param board 棋盘二维数组
-     * @param size 棋盘尺寸
-     * @param x 评估点横坐标
-     * @param y 评估点纵坐标
-     * @param color 评估的阵营颜色（1黑，2白）
-     * @return 该点的阵型加权得分
+     * 给某个点打分的方法
+     * 把横、竖、左斜、右斜四个方向的分数加起来，就是总分。
      */
-    private int evaluatePosition(int[][] board, int size, int x, int y, int color) {
-        int totalScore = 0;
-        // 四个探测轴：横轴、纵轴、两条对角线
-        int[][] directions = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
+    private int evaluatePoint(int[][] board, int x, int y, int color) {
+        int finalScore = 0;
         
-        for (int[] d : directions) {
-            int count = 1;  // 当前轴上连成一线的同色棋子总数
-            int block = 0;  // 当前轴上被堵死的端点数（取值为 0, 1 或 2）
-            
-            // 正向四步探测
-            for (int step = 1; step <= 4; step++) {
-                int nx = x + d[0] * step;
-                int ny = y + d[1] * step;
-                // 若坐标越界，视为该端被物理边界堵死
-                if (nx < 0 || nx >= size || ny < 0 || ny >= size) { block++; break; }
-                
-                if (board[nx][ny] == color) { 
-                    count++; // 同色棋子，延长连线
-                } else if (board[nx][ny] == 0) { 
-                    break;   // 遇到空位，说明线未被堵死，停止延伸探测
-                } else { 
-                    block++; // 遇到敌方棋子，说明该端被堵死
-                    break; 
-                }                 
+        // 调用下面的 evaluateSingleLine 方法，dx 和 dy 组合代表不同的方向
+        finalScore += evaluateSingleLine(board, x, y, 1, 0, color);  // dx=1,dy=0 代表横向
+        finalScore += evaluateSingleLine(board, x, y, 0, 1, color);  // dx=0,dy=1 代表纵向
+        finalScore += evaluateSingleLine(board, x, y, 1, 1, color);  // dx=1,dy=1 代表主对角
+        finalScore += evaluateSingleLine(board, x, y, 1, -1, color); // 代表副对角
+        
+        return finalScore;
+    }
+
+    /**
+     * 对单条直线打分
+     * 这个算法的核心思想是：找连着几个子，以及这串棋子的两头有没有被“堵死”。
+     */
+    private int evaluateSingleLine(int[][] board, int x, int y, int dx, int dy, int color) {
+        int stoneCount = 1; // 记录连子的数量（自己本身算1颗）
+        
+        // blockedEnds 用来记录两头被堵的情况。
+        // 如果是 0，说明两头都有空位，是“活”棋；
+        // 如果是 1，说明一头被堵，叫“冲”棋或者“眠”棋；
+        // 如果是 2，说明两头都被死死堵住，这就是废棋了。
+        int blockedEnds = 0; 
+        
+        // ---------------- 往前探 ----------------
+        int currX = x + dx;
+        int currY = y + dy;
+        for (int step = 0; step < 4; step++) {
+            // 如果撞到了棋盘边缘，那肯定算这头被堵死了
+            if (currX < 0 || currX >= GameModel.BOARD_SIZE || currY < 0 || currY >= GameModel.BOARD_SIZE) {
+                blockedEnds++; 
+                break;
             }
-            
-            // 反向四步探测（逻辑同正向）
-            for (int step = 1; step <= 4; step++) {
-                int nx = x - d[0] * step;
-                int ny = y - d[1] * step;
-                if (nx < 0 || nx >= size || ny < 0 || ny >= size) { block++; break; }
-                
-                if (board[nx][ny] == color) { 
-                    count++; 
-                } else if (board[nx][ny] == 0) { 
-                    break; 
-                } else { 
-                    block++; 
-                    break; 
-                }
+            if (board[currX][currY] == color) {
+                stoneCount++; // 颜色一样，连子数 +1
+            } else if (board[currX][currY] == 0) {
+                break; // 碰到空位了，说明这头是活的，直接停下来
+            } else {
+                blockedEnds++; // 碰到敌人棋子了，这头被堵死了
+                break;
             }
-            
-            // 极其核心的权重赋值表：通过赋予极大差值的权重，引导 AI 做出理性决策
-            if (count >= 5) totalScore += 100000;                  // 连五：达成或破坏必胜条件，优先级最高
-            else if (count == 4 && block == 0) totalScore += 10000;// 活四：两端皆空的四连，等同于必胜
-            else if (count == 4 && block == 1) totalScore += 1000; // 冲四：一端被堵的四连，必须防守
-            else if (count == 3 && block == 0) totalScore += 1000; // 活三：有极大发展潜力的阵型
-            else if (count == 3 && block == 1) totalScore += 100;  // 眠三：发展受限的三连
-            else if (count == 2 && block == 0) totalScore += 100;  // 活二：初级发展阵型
-            else if (count == 2 && block == 1) totalScore += 10;   // 眠二：价值较低
-            else totalScore += 1;                                  // 单子边缘收益
+            currX += dx;
+            currY += dy;
         }
-        return totalScore;
+        
+        // ---------------- 往后探 ----------------
+        currX = x - dx;
+        currY = y - dy;
+        for (int step = 0; step < 4; step++) {
+            if (currX < 0 || currX >= GameModel.BOARD_SIZE || currY < 0 || currY >= GameModel.BOARD_SIZE) {
+                blockedEnds++;
+                break;
+            }
+            if (board[currX][currY] == color) {
+                stoneCount++;
+            } else if (board[currX][currY] == 0) {
+                break;
+            } else {
+                blockedEnds++;
+                break;
+            }
+            currX -= dx;
+            currY -= dy;
+        }
+        
+        // ---------------- 根据连子数量和被堵情况进行人工打分 ----------------
+        // 这里的数字是我们手动调的权重。
+        if (stoneCount >= 5) {
+            return 100000; // 连五，最高优先级，必杀
+        } else if (stoneCount == 4) {
+            if (blockedEnds == 0) return 10000; // 活四：两头空，下一回合必连五
+            if (blockedEnds == 1) return 1000;  // 冲四：虽然一头被堵，但只要不管它也能连五，所以分也很高
+        } else if (stoneCount == 3) {
+            if (blockedEnds == 0) return 1000;  // 活三：威胁很大，下一回合就变活四了
+            if (blockedEnds == 1) return 100;   // 眠三：一头被堵了，威胁相对小一些
+        } else if (stoneCount == 2) {
+            if (blockedEnds == 0) return 100;   // 活二
+            if (blockedEnds == 1) return 10;    // 眠二：分数给得很低
+        }
+        
+        // 啥阵型都不是的话，给个保底分 1 分
+        return 1;
     }
 }

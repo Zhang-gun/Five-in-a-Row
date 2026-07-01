@@ -5,142 +5,208 @@ import java.awt.event.MouseEvent;
 import java.util.List;
 
 /**
- * 棋盘视图类 (MVC - View)
- * 继承自 JPanel，是图形界面的核心绘制区域。
- * 遵循 MVC 设计模式的低耦合原则，本类完全剥离了胜负判断等底层游戏逻辑，
- * 仅负责两项核心任务：1. 通过 Graphics2D 绘制网格与棋子渲染； 2. 捕获鼠标事件并将物理坐标映射为逻辑坐标。
+ * 画板绘制类 (View层)
+ * 作用：它就像一张画布，不管游戏规则，只负责把二维数组里的数字用图形画出来。
+ * 这个类里面重写了 paintComponent，是 Java Swing 面试经常被考的核心知识。
  */
 public class BoardPanel extends JPanel {
-    // UI 常量设定
-    public static final int CELL_SIZE = 40;       // 网格中单一正方形格子的边长（像素）
-    public static final int MARGIN = 30;          // 棋盘最外围的边框留白，防止最外围棋子渲染超出边界
-    private static final Color WOOD_COLOR = new Color(230, 180, 120); // 实例化一个自定义的柔和木材质色调
+    
+    // 我们把每一个小格子的宽和高定为 40 像素
+    public static final int CELL_SIZE = 40;       
+    
+    // 棋盘边缘一定要留白，不然最外围的棋子有一半会画出屏幕外面去
+    public static final int MARGIN = 40;          
+    
+    // 挑了一个类似木头的颜色，看起来比单纯的灰底好看
+    private static final Color BOARD_COLOR = new Color(222, 184, 135); 
 
-    // 引入依赖
-    private GameModel model; // 持有模型的引用，采用只读方式获取当前棋盘状态矩阵
-    private BoardClickListener listener; // 声明回调监听器引用
+    private GameModel model; 
+    
+    // 回调接口
+    private BoardClickListener listener; 
 
     /**
-     * 定义回调接口。
-     * 当鼠标成功触发点击且算出坐标后，通过此接口向外部控制层 (Controller) 传递坐标。
-     * 这种设计解耦了 BoardPanel 与主窗口的硬关联。
+     * 这是我们自己定义的一个接口。
+     * 为什么不直接在鼠标点击事件里去改数组？
+     * 因为画板（View）不能干涉数据（Model），我们通过接口把坐标传出去，
+     * 让外面的主窗口（Controller）去决定能不能下棋。
      */
     public interface BoardClickListener {
-        void onBoardClicked(int i, int j);
+        void onBoardClicked(int x, int y);
     }
 
-    public BoardPanel(GameModel model, BoardClickListener listener) {
-        this.model = model;
-        this.listener = listener;
+    public BoardPanel(GameModel gameModel, BoardClickListener clickListener) {
+        this.model = gameModel;
+        this.listener = clickListener;
         
-        // 动态计算整个组件的物理像素尺寸：格子数 * 格边长 + 左右(上下)留白总和
-        int panelSize = GameModel.BOARD_SIZE * CELL_SIZE + MARGIN * 2;
-        setPreferredSize(new Dimension(panelSize, panelSize));
-        setBackground(WOOD_COLOR); 
+        // 算出画板的物理尺寸：15个格子 * 40像素 + 两边的留白（40 * 2）
+        int totalWidth = GameModel.BOARD_SIZE * CELL_SIZE + MARGIN * 2;
+        int totalHeight = GameModel.BOARD_SIZE * CELL_SIZE + MARGIN * 2;
+        
+        // 把这个尺寸告诉上层的布局管理器
+        this.setPreferredSize(new Dimension(totalWidth, totalHeight));
+        this.setBackground(BOARD_COLOR); 
 
-        // 注册匿名内部类的鼠标监听适配器，专用于捕获玩家落子行为
-        addMouseListener(new MouseAdapter() {
+        // 监听鼠标左键点击
+        this.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // 【核心算法】物理坐标 (X,Y) 到 逻辑矩阵索引 (i,j) 的降维映射映射
-                // 算式解析：先剔除边框留白的偏移量，再加上半个格子的长度进行舍入补偿，
-                // 使得鼠标在靠近网格交叉点时，具有一种“磁吸”对齐的效果。
-                int i = (e.getX() - MARGIN + CELL_SIZE / 2) / CELL_SIZE;
-                int j = (e.getY() - MARGIN + CELL_SIZE / 2) / CELL_SIZE;
-                
-                // 将计算过滤完毕的合法矩阵坐标发送给监听它的主控制器
-                if (listener != null) {
-                    listener.onBoardClicked(i, j);
-                }
+                handleMouseClick(e.getX(), e.getY());
             }
         });
     }
 
     /**
-     * Java Swing 重绘生命周期的核心回调方法。
-     * 每次界面刷新（如拖动窗口、调用 repaint()）时，JVM 均会调用此方法渲染当前帧。
+     * 难点：坐标映射。
+     * 鼠标拿到的 e.getX() 是电脑屏幕上的像素（比如118像素），
+     * 我们必须把它转换成二维数组的索引（0~14）。
      */
-    @Override
-    protected void paintComponent(Graphics g) {
-        // 调用超类方法，清除当前缓冲帧残留的上一帧像素污渍
-        super.paintComponent(g); 
-        // 将基础画笔强转为高级 Graphics2D 对象，以调用更丰富的渲染 API
-        Graphics2D g2d = (Graphics2D) g; 
+    private void handleMouseClick(int mouseX, int mouseY) {
+        // 第一步：先减去 MARGIN（40），把边缘的偏差去掉。
+        // 第二步：为什么要加上 CELL_SIZE / 2（20）？
+        // 这是为了实现“四舍五入”。比如鼠标点在 18 的位置，加上 20 就是 38，除以 40 就是 0。
+        // 如果点在 25 的位置，加上 20 就是 45，除以 40 就是 1。
+        // 这样玩家哪怕没点准，只要离哪个交叉点近，棋子就会自动吸附到那个点上。
+        int arrayX = (mouseX - MARGIN + CELL_SIZE / 2) / CELL_SIZE;
+        int arrayY = (mouseY - MARGIN + CELL_SIZE / 2) / CELL_SIZE;
         
-        // 【UI优化】开启抗锯齿渲染管线，消除绘制圆形与倾斜直线时产生的锯齿感，提升视觉清晰度
-        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-        int size = GameModel.BOARD_SIZE;
-        g2d.setColor(Color.BLACK); 
-        
-        // 1. 绘制底层纵横交错的网格线
-        for (int i = 0; i < size; i++) {
-            // 利用简单的线性函数定位每一条横线和竖线的始终点物理坐标
-            g2d.drawLine(MARGIN, MARGIN + i * CELL_SIZE, MARGIN + (size - 1) * CELL_SIZE, MARGIN + i * CELL_SIZE);
-            g2d.drawLine(MARGIN + i * CELL_SIZE, MARGIN, MARGIN + i * CELL_SIZE, MARGIN + (size - 1) * CELL_SIZE);
-        }
-
-        // 2. 绘制星位（专业棋盘中用于定位的实心小圆点，一般有天元及四角星位）
-        int[] stars = {3, 7, 11};
-        for (int x : stars) {
-            for (int y : stars) {
-                g2d.fillOval(MARGIN + x * CELL_SIZE - 4, MARGIN + y * CELL_SIZE - 4, 8, 8);
-            }
-        }
-
-        // 3. 遍历模型层的二维矩阵状态数组，并渲染所有已落子的棋子
-        int[][] board = model.getBoard();
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
-                if (board[i][j] != 0) {
-                    drawStone(g2d, i, j, board[i][j]);
-                }
-            }
-        }
-        
-        // 4. 辅助视效：绘制红色方框追踪显示全局最后一手的具体位置，降低玩家的记忆负担
-        List<Point> history = model.getHistory();
-        if (!history.isEmpty()) {
-            Point p = history.get(history.size() - 1);
-            g2d.setColor(Color.RED);
-            g2d.drawRect(MARGIN + p.x * CELL_SIZE - 2, MARGIN + p.y * CELL_SIZE - 2, 4, 4);
+        if (this.listener != null) {
+            // 把算好的数组坐标报告给外面
+            this.listener.onBoardClicked(arrayX, arrayY);
         }
     }
 
     /**
-     * 封装的单个棋子绘制方法，采用坐标反向映射及径向渐变算法进行拟物化渲染。
-     * 
-     * @param g2d Graphics2D 渲染引擎
-     * @param i 逻辑矩阵横坐标
-     * @param j 逻辑矩阵纵坐标
-     * @param color 棋子阵营枚举类型（1代表黑子，2代表白子）
+     * 这是整个类最核心的方法。
+     * 每次窗口被挡住又移开，或者我们主动调用 repaint() 时，系统就会执行这里。
      */
-    private void drawStone(Graphics2D g2d, int i, int j, int color) {
-        // 反向映射：由逻辑坐标算出目标图形包围盒的左上角绝对像素坐标
-        int xPos = MARGIN + i * CELL_SIZE - CELL_SIZE / 2 + 2;
-        int yPos = MARGIN + j * CELL_SIZE - CELL_SIZE / 2 + 2;
-        // 稍作尺寸收缩，使相邻棋子之间保留微小的呼吸空间
-        int s = CELL_SIZE - 4; 
+    @Override
+    protected void paintComponent(Graphics g) {
+        // 注意：这句 super 一定不能丢！它的作用是把上一帧的画面擦干净，
+        // 不然你画的东西会跟之前残影重叠在一起，变成大染缸。
+        super.paintComponent(g); 
+        
+        // 把普通的画笔 g 强转成高阶的 g2d，g2d 提供了很多高级画法（比如加粗、渐变色）
+        Graphics2D g2d = (Graphics2D) g; 
+        
+        // 开启抗锯齿，不然画出的圆圈边缘全是像素颗粒（狗牙状）
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-        // 【图形进阶】抛弃单调的纯色填充，采用 RadialGradientPaint 构建光源渐变以形成 3D 球体的错觉
-        RadialGradientPaint rgp;
-        if (color == 1) { 
-            // 渲染黑子：通过构建从左上角偏离中心点向外辐射的渐变矩阵，将颜色由高光亮灰过渡至深黑
-            rgp = new RadialGradientPaint(new Point(xPos + s/3, yPos + s/3), s, 
-                    new float[]{0f, 1f}, new Color[]{Color.LIGHT_GRAY, Color.BLACK});
-        } else { 
-            // 渲染白子：构建自纯白向外辐射渐变至边缘灰底的光影
-            rgp = new RadialGradientPaint(new Point(xPos + s/3, yPos + s/3), s, 
-                    new float[]{0f, 1f}, new Color[]{Color.WHITE, Color.GRAY});
+        drawGridLines(g2d);     // 画线
+        drawAxisLabels(g2d);    // 画坐标数字
+        drawStarPoints(g2d);    // 画五个小黑点
+        drawAllStones(g2d);     // 画棋子
+        drawLastMoveMarker(g2d);// 重点标出最后一步
+    }
+
+    private void drawGridLines(Graphics2D g2d) {
+        g2d.setColor(Color.BLACK); 
+        int size = GameModel.BOARD_SIZE;
+        
+        // 利用循环，一次画一条横线和一条竖线
+        for (int i = 0; i < size; i++) {
+            // 起点 y 和终点 y 是一样的，x 从 margin 一直画到棋盘右边
+            int yPos = MARGIN + i * CELL_SIZE;
+            g2d.drawLine(MARGIN, yPos, MARGIN + (size - 1) * CELL_SIZE, yPos);
+            
+            int xPos = MARGIN + i * CELL_SIZE;
+            g2d.drawLine(xPos, MARGIN, xPos, MARGIN + (size - 1) * CELL_SIZE);
+        }
+    }
+
+    private void drawAxisLabels(Graphics2D g2d) {
+        g2d.setFont(new Font("Arial", Font.BOLD, 12));
+        g2d.setColor(Color.DARK_GRAY);
+        
+        int size = GameModel.BOARD_SIZE;
+        for (int i = 0; i < size; i++) {
+            // 画英文字母 A, B, C...
+            String charLabel = String.valueOf((char)('A' + i));
+            int charX = MARGIN + i * CELL_SIZE - 4; // -4是为了居中
+            int topCharY = MARGIN - 15; // 放在最上边留白区
+            g2d.drawString(charLabel, charX, topCharY);
+            
+            // 画数字 1, 2, 3...
+            String numLabel = String.valueOf(i + 1);
+            int leftNumX = MARGIN - 25;
+            int numY = MARGIN + i * CELL_SIZE + 4;
+            g2d.drawString(numLabel, leftNumX, numY);
+        }
+    }
+
+    private void drawStarPoints(Graphics2D g2d) {
+        g2d.setColor(Color.BLACK);
+        // 五子棋的标准星位在第4根线和第12根线（索引就是3和11），中间是天元（7）
+        int[] stars = {3, 7, 11}; 
+        
+        for (int i = 0; i < stars.length; i++) {
+            for (int j = 0; j < stars.length; j++) {
+                int px = MARGIN + stars[i] * CELL_SIZE;
+                int py = MARGIN + stars[j] * CELL_SIZE;
+                // 用 fillOval 画实心圆，圆心偏移-4是为了以交叉点为中心画直径为8的圆
+                g2d.fillOval(px - 4, py - 4, 8, 8);
+            }
+        }
+    }
+
+    private void drawAllStones(Graphics2D g2d) {
+        // 去问模型要数据
+        int[][] currentBoard = this.model.getBoard();
+        int size = GameModel.BOARD_SIZE;
+        
+        // 两层 for 循环，如果是 1 就画黑子，如果是 2 就画白子
+        for (int row = 0; row < size; row++) {
+            for (int col = 0; col < size; col++) {
+                int colorValue = currentBoard[row][col];
+                if (colorValue == 1) {
+                    drawSingleStone(g2d, row, col, true);
+                } else if (colorValue == 2) {
+                    drawSingleStone(g2d, row, col, false);
+                }
+            }
+        }
+    }
+
+    private void drawSingleStone(Graphics2D g2d, int gridX, int gridY, boolean isBlack) {
+        // 先把数组坐标再转回成像素坐标
+        int startX = MARGIN + gridX * CELL_SIZE - CELL_SIZE / 2 + 2;
+        int startY = MARGIN + gridY * CELL_SIZE - CELL_SIZE / 2 + 2;
+        // 把棋子画得比格子稍小一点，以免连在一起太挤了
+        int stoneSize = CELL_SIZE - 4; 
+
+        // 亮点：不用纯黑色画棋子，用了 RadialGradientPaint (径向渐变色)！
+        // 它会产生一种中间发白（反光），边缘发黑的光学效果，看起来像真的立体玻璃棋子。
+        if (isBlack) {
+            RadialGradientPaint paint = new RadialGradientPaint(
+                new Point(startX + stoneSize / 3, startY + stoneSize / 3), 
+                stoneSize, 
+                new float[]{0.0f, 1.0f}, 
+                new Color[]{Color.LIGHT_GRAY, Color.BLACK}
+            );
+            g2d.setPaint(paint); // 挂载渐变色画笔
+        } else {
+            RadialGradientPaint paint = new RadialGradientPaint(
+                new Point(startX + stoneSize / 3, startY + stoneSize / 3), 
+                stoneSize, 
+                new float[]{0.0f, 1.0f}, 
+                new Color[]{Color.WHITE, Color.GRAY}
+            );
+            g2d.setPaint(paint);
         }
         
-        // 注入渐变着色器并执行填充指令
-        g2d.setPaint(rgp); 
-        g2d.fillOval(xPos, yPos, s, s); 
-        
-        // 追加一层细微的暗灰色描边，作为漫反射边缘以增强整体材质感
-        g2d.setColor(Color.DARK_GRAY);
-        g2d.setStroke(new BasicStroke(1));
-        g2d.drawOval(xPos, yPos, s, s);
+        g2d.fillOval(startX, startY, stoneSize, stoneSize); 
+    }
+
+    private void drawLastMoveMarker(Graphics2D g2d) {
+        List<Point> history = this.model.getHistory();
+        if (history.size() > 0) {
+            // 获取最后一步下的那颗棋子
+            Point lastPoint = history.get(history.size() - 1);
+            g2d.setColor(Color.RED);
+            int boxX = MARGIN + lastPoint.x * CELL_SIZE - 3;
+            int boxY = MARGIN + lastPoint.y * CELL_SIZE - 3;
+            // 在上面画一个红色的小框，提示玩家这是最后走的
+            g2d.drawRect(boxX, boxY, 6, 6);
+        }
     }
 }

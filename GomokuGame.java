@@ -5,188 +5,221 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 
 /**
- * 顶层主程序类 (MVC - Controller / Main UI)
- * 继承自 JFrame，是整个客户端软件的顶层容器和启动入口。
- * 承担了 Controller 控制器的职责，负责协调 Model (游戏数据)、View (棋盘画板)、AI 算法模块以及底层的数据持久化组件，
- * 是驱动整个生命周期运转的核心调度枢纽。
+ * 游戏主窗口类 (MVC架构里的 Controller 控制器)
+ * 这个类是最大的管家，它负责把各个模块（界面、模型、AI）拼装起来，
+ * 并处理所有的鼠标点击和按钮事件。
  */
 public class GomokuGame extends JFrame implements BoardPanel.BoardClickListener {
-    // 聚合系统三大核心子模块引用
-    private GameModel model;      // 指向数据逻辑中枢
-    private AIPlayer aiPlayer;    // 指向启发式算法引擎
-    private BoardPanel boardPanel;// 指向负责视图渲染的画布
     
-    // 软件的业务状态参数设定
-    private int gameMode = 0; // 交互模式枚举 - 0: 传统双人模式, 1: 初级人机交互, 2: 高级人机交互
-    private int blackWins = 0; // 黑方历史胜局总计
-    private int whiteWins = 0; // 白方历史胜局总计
+    // 聚合三个核心组件
+    private GameModel model;      
+    private AIPlayer aiPlayer;    
+    private BoardPanel boardPanel;
     
-    // Swing 控件成员声明
-    private JTextArea logArea;             // 滚动日志视窗区域
-    private JLabel statusLabel;            // 底部运行状态指示器
-    private JLabel blackScoreLabel;        // 计分板黑方比分展示器
-    private JLabel whiteScoreLabel;        // 计分板白方比分展示器
-    private JLabel currentTurnLabel;       // 顶部回合指示器
+    // 游戏模式：0是双人对战，1是简单人机，2是困难人机
+    private int gameMode = 0; 
+    
+    // 记录赢了多少局
+    private int blackWins = 0; 
+    private int whiteWins = 0; 
+    
+    // 我们声明了一堆需要随状态改变的界面控件
+    private JTextArea logArea;             
+    private JLabel statusLabel;            
+    private JLabel blackScoreLabel;        
+    private JLabel whiteScoreLabel;        
+    private JLabel currentTurnLabel;       
 
     public GomokuGame() {
-        // 1. 在构造函数初期完成底层业务组件的实例化工作
-        model = new GameModel();
-        aiPlayer = new AIPlayer();
+        // 第一步：new 出核心模块
+        this.model = new GameModel();
+        this.aiPlayer = new AIPlayer();
         
-        // 2. 初始化持久化状态：调用系统级 I/O 读取往期战绩记录，恢复比分数据
+        // 调用 C 同学写的文件存储类，读取上次存下来的比分
         int[] scores = RecordManager.loadScores();
-        blackWins = scores[0];
-        whiteWins = scores[1];
+        this.blackWins = scores[0];
+        this.whiteWins = scores[1];
         
-        // 3. 构建操作系统级别的图形窗口句柄及其属性
-        initWindow();
+        // 设置窗口的大小、居中等属性
+        setupWindowProperties();
         
-        // 4. 构建顶层布局管理器 BorderLayout
-        JPanel container = new JPanel(new BorderLayout(10, 10));
-        container.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        // 加载顶部的文件和帮助菜单
+        setupTopMenu(); 
+        
+        // 重点知识：为什么要用 BorderLayout（边界布局）？
+        // 它能把窗口划分成东西南北中 5 个区域。这样即使拉伸窗口，
+        // 棋盘和控制面板的位置也不会串位。
+        JPanel mainContainer = new JPanel();
+        mainContainer.setLayout(new BorderLayout(10, 10)); // 10代表组件之间的空隙
+        mainContainer.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // 实例化 View 视窗，通过 this 指针实现控制层的回调绑定
-        boardPanel = new BoardPanel(model, this); 
+        // 把自己 (this) 当作监听器传给画板
+        this.boardPanel = new BoardPanel(this.model, this); 
         
-        // 拼装挂载于容器东侧 (EAST) 的复杂交互控制面板
-        JPanel sidePanel = createSidePanel();
+        // 组装右边那一长串控制面板
+        JPanel rightSidePanel = createRightControlPanel();
         
-        // 实例化底部的状态条组件
-        statusLabel = new JLabel(" 欢迎来到五子棋对战系统 | 系统初始化就绪 ");
-        statusLabel.setBorder(BorderFactory.createEtchedBorder());
+        // 底部的状态提示
+        this.statusLabel = new JLabel(" 欢迎来到五子棋游戏！");
+        this.statusLabel.setBorder(BorderFactory.createEtchedBorder());
         
-        // 按方位要求，将三大核心 UI 块组合进顶层容器中
-        container.add(boardPanel, BorderLayout.CENTER);
-        container.add(sidePanel, BorderLayout.EAST);
-        container.add(statusLabel, BorderLayout.SOUTH);
+        // 往主容器里塞东西：中间放画板，东边放右侧面板，南边放状态栏
+        mainContainer.add(this.boardPanel, BorderLayout.CENTER);
+        mainContainer.add(rightSidePanel, BorderLayout.EAST);
+        mainContainer.add(this.statusLabel, BorderLayout.SOUTH);
         
-        add(container); 
+        this.add(mainContainer); 
     }
 
-    /**
-     * 封装底层窗口 UI 的常规初始化设定参数
-     */
-    private void initWindow() {
-        setTitle("Java 高级五子棋博弈系统");
-        // 动态计算最佳窗口分辨率，防止缩放导致的 UI 异常
-        int width = GameModel.BOARD_SIZE * BoardPanel.CELL_SIZE + BoardPanel.MARGIN * 2 + 300;
-        int height = GameModel.BOARD_SIZE * BoardPanel.CELL_SIZE + BoardPanel.MARGIN * 2 + 100;
-        setSize(width, height);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); 
-        setLocationRelativeTo(null); 
-        setResizable(false); 
+    private void setupWindowProperties() {
+        this.setTitle("Java 课程设计 - 面向对象五子棋");
+        int w = GameModel.BOARD_SIZE * BoardPanel.CELL_SIZE + BoardPanel.MARGIN * 2 + 300;
+        int h = GameModel.BOARD_SIZE * BoardPanel.CELL_SIZE + BoardPanel.MARGIN * 2 + 80;
+        this.setSize(w, h);
+        
+        // 记住这个属性：EXIT_ON_CLOSE，点叉叉的时候会把控制台的运行程序也关掉。
+        // 如果不加这句，窗口没了但是后台程序还在偷偷跑。
+        this.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); 
+        this.setLocationRelativeTo(null); 
+        this.setResizable(false); 
     }
 
-    /**
-     * 构建并返回右侧整合的控制面板 (Control Panel)
-     * 布局剖析：利用 BoxLayout 的纵向堆叠特性 (Y_AXIS) ，将不同功能的子 JPanel 区块垂直封装，
-     * 以达成良好的界面交互层级与模块化解耦。
-     */
-    private JPanel createSidePanel() {
-        JPanel side = new JPanel();
-        side.setLayout(new BoxLayout(side, BoxLayout.Y_AXIS)); 
-        side.setPreferredSize(new Dimension(250, 0)); 
-
-        // -- 子模块 I: 交互模式下拉选择器 --
-        JPanel modePanel = new JPanel(new FlowLayout());
-        modePanel.setBorder(BorderFactory.createTitledBorder("博弈模式配置"));
-        JComboBox<String> modeBox = new JComboBox<>(new String[]{"PVP 双人对弈", "PVE 人机博弈 (初级)", "PVE 人机博弈 (高级)"});
-        modeBox.addActionListener(e -> {
-            gameMode = modeBox.getSelectedIndex(); 
-            resetGame(); // 切换模式时自动重置内存矩阵
+    private void setupTopMenu() {
+        JMenuBar menuBar = new JMenuBar();
+        
+        JMenu gameMenu = new JMenu("游戏 (G)");
+        JMenuItem restartMenu = new JMenuItem("重新开始");
+        JMenuItem exitMenu = new JMenuItem("退出游戏");
+        
+        // 这里用到了 Java 8 的 Lambda 表达式 (e -> xxx)，
+        // 写法比传统的 new ActionListener() 简洁多了。
+        restartMenu.addActionListener(e -> restartGame());
+        exitMenu.addActionListener(e -> System.exit(0)); // System.exit(0) 直接杀进程退出
+        
+        gameMenu.add(restartMenu);
+        gameMenu.addSeparator(); // 加一条分割线好看点
+        gameMenu.add(exitMenu);
+        
+        JMenu helpMenu = new JMenu("帮助 (H)");
+        JMenuItem ruleMenu = new JMenuItem("游戏规则");
+        
+        ruleMenu.addActionListener(e -> {
+            // 弹出一个专门的帮助窗口
+            HelpDialog dialog = new HelpDialog(this);
+            dialog.setVisible(true);
         });
-        modePanel.add(modeBox);
-
-        // -- 子模块 II: 战况比分面板 (集成持久化存储) --
-        JPanel scorePanel = new JPanel(new GridLayout(2, 2, 5, 5));
-        scorePanel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "生涯战绩", TitledBorder.LEFT, TitledBorder.TOP));
         
-        scorePanel.add(new JLabel("黑方(执先)胜局:"));
-        blackScoreLabel = new JLabel(String.valueOf(blackWins));
-        scorePanel.add(blackScoreLabel);
+        helpMenu.add(ruleMenu);
         
-        scorePanel.add(new JLabel("白方(执后)胜局:"));
-        whiteScoreLabel = new JLabel(String.valueOf(whiteWins));
-        scorePanel.add(whiteScoreLabel);
-
-        // -- 子模块 III: 动态回合状态灯 --
-        JPanel infoPanel = new JPanel(new GridLayout(2, 1));
-        infoPanel.setBorder(BorderFactory.createTitledBorder("博弈状态"));
-        currentTurnLabel = new JLabel("指令等待：黑方回合", JLabel.CENTER);
-        currentTurnLabel.setFont(new Font("微软雅黑", Font.BOLD, 18));
-        currentTurnLabel.setForeground(Color.BLACK);
-        infoPanel.add(currentTurnLabel);
-
-        // -- 子模块 IV: 事件日志滚动流媒体视窗 --
-        logArea = new JTextArea();
-        logArea.setEditable(false); // 封锁用户底层键入权限
-        logArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        JScrollPane scrollPane = new JScrollPane(logArea); 
-        scrollPane.setBorder(BorderFactory.createTitledBorder("系统运行日志"));
-
-        // -- 子模块 V: 控制台按钮指令区 --
-        JPanel btnPanel = new JPanel(new FlowLayout());
-        JButton restartBtn = new JButton("重启系统");
-        JButton undoBtn = new JButton("执行回退");
-        JButton clearScoreBtn = new JButton("格式化比分");
-
-        // 基于 Lambda 匿名函数映射点击事件至具体的底层控制器方法
-        restartBtn.addActionListener(e -> resetGame());
-        undoBtn.addActionListener(e -> undoMove());
-        clearScoreBtn.addActionListener(e -> clearScores());
-
-        btnPanel.add(restartBtn);
-        btnPanel.add(undoBtn);
-        btnPanel.add(clearScoreBtn);
-
-        // 将实例化的五大子模块顺序塞入纵向布局流容器，并利用 VerticalStrut 撑起美学间距
-        side.add(modePanel);
-        side.add(Box.createVerticalStrut(10));
-        side.add(scorePanel);
-        side.add(Box.createVerticalStrut(10));
-        side.add(infoPanel);
-        side.add(Box.createVerticalStrut(10));
-        side.add(scrollPane);
-        side.add(Box.createVerticalStrut(10));
-        side.add(btnPanel);
-
-        return side;
+        menuBar.add(gameMenu);
+        menuBar.add(helpMenu);
+        this.setJMenuBar(menuBar);
     }
 
     /**
-     * 重载自定义的回调事件，充当全局控制神经。
-     * 当收到 BoardPanel 捕捉并映射好的鼠标逻辑坐标事件时，触发后续的核心业务链。
+     * 拼接右侧那一长条的控制界面
+     */
+    private JPanel createRightControlPanel() {
+        JPanel rightPanel = new JPanel();
+        
+        // 这里用了 BoxLayout的 Y_AXIS（垂直布局）。
+        // FlowLayout 是一排排过去的，而 BoxLayout Y_AXIS 保证所有组件从上到下像叠罗汉一样。
+        rightPanel.setLayout(new BoxLayout(rightPanel, BoxLayout.Y_AXIS)); 
+        rightPanel.setPreferredSize(new Dimension(250, 0)); 
+
+        // -- 模式选择 --
+        JPanel modeBoxPanel = new JPanel(new FlowLayout());
+        modeBoxPanel.setBorder(BorderFactory.createTitledBorder("选择模式"));
+        String[] modes = {"双人对战", "简单人机", "困难人机"};
+        JComboBox<String> modeComboBox = new JComboBox<>(modes); // 下拉框组件
+        modeComboBox.addActionListener(e -> {
+            // 获取下拉框选中的索引（0或1或2），赋值给变量
+            this.gameMode = modeComboBox.getSelectedIndex(); 
+            restartGame(); 
+        });
+        modeBoxPanel.add(modeComboBox);
+
+        // -- 历史得分 --
+        // GridLayout(2, 2) 意思是两行两列的网格
+        JPanel scorePanel = new JPanel(new GridLayout(2, 2, 5, 5));
+        scorePanel.setBorder(BorderFactory.createTitledBorder("历史战绩"));
+        
+        scorePanel.add(new JLabel("黑方胜利:"));
+        this.blackScoreLabel = new JLabel(String.valueOf(this.blackWins));
+        scorePanel.add(this.blackScoreLabel);
+        
+        scorePanel.add(new JLabel("白方胜利:"));
+        this.whiteScoreLabel = new JLabel(String.valueOf(this.whiteWins));
+        scorePanel.add(this.whiteScoreLabel);
+
+        // -- 当前轮次 --
+        JPanel turnPanel = new JPanel(new GridLayout(2, 1));
+        turnPanel.setBorder(BorderFactory.createTitledBorder("当前状态"));
+        this.currentTurnLabel = new JLabel("轮到黑棋落子", JLabel.CENTER);
+        this.currentTurnLabel.setFont(new Font("宋体", Font.BOLD, 18));
+        turnPanel.add(this.currentTurnLabel);
+
+        // -- 滚动日志区 --
+        this.logArea = new JTextArea();
+        this.logArea.setEditable(false); // 不让玩家自己用键盘乱敲日志
+        // JScrollPane 会自动给文本框加上滚轮
+        JScrollPane scrollPane = new JScrollPane(this.logArea); 
+        scrollPane.setBorder(BorderFactory.createTitledBorder("下棋记录"));
+
+        // -- 按钮区 --
+        JPanel buttonsPanel = new JPanel(new FlowLayout());
+        JButton btnRestart = new JButton("重开");
+        JButton btnUndo = new JButton("悔棋");
+
+        btnRestart.addActionListener(e -> restartGame());
+        btnUndo.addActionListener(e -> handleUndo());
+
+        buttonsPanel.add(btnRestart);
+        buttonsPanel.add(btnUndo);
+
+        // 把这些面板全加到 rightPanel 里面，中间用 Box.createVerticalStrut(10) 加了 10 像素的间隔
+        rightPanel.add(modeBoxPanel);
+        rightPanel.add(Box.createVerticalStrut(10));
+        rightPanel.add(scorePanel);
+        rightPanel.add(Box.createVerticalStrut(10));
+        rightPanel.add(turnPanel);
+        rightPanel.add(Box.createVerticalStrut(10));
+        rightPanel.add(scrollPane);
+        rightPanel.add(Box.createVerticalStrut(10));
+        rightPanel.add(buttonsPanel);
+
+        return rightPanel;
+    }
+
+    /**
+     * 当接收到画板传递过来的鼠标点击坐标时，走这里
      */
     @Override
-    public void onBoardClicked(int i, int j) {
-        if (model.isGameOver()) {
-            addLog("系统级拦截：博弈已分出胜负，请重启对局模块。");
-            return;
-        }
-        // 并发拦截：当处于 PVE 人机模式，且当前非玩家操作权限阶段时，抛弃无意义的点击脉冲
-        if (gameMode > 0 && !model.isBlackTurn()) return; 
+    public void onBoardClicked(int x, int y) {
+        if (this.model.isGameOver()) return; // 游戏结束不给下
+        if (this.gameMode > 0 && !this.model.isBlackTurn()) return; // 人机模式下，如果没轮到你，屏蔽点击
 
-        // 将合法坐标推送至模型层进行存储
-        if (model.addMove(i, j)) {
-            String colorStr = model.isBlackTurn() ? "白方棋子" : "黑方棋子"; 
-            addLog(String.format("[执行流水号 %02d] 玩家签入 %s: (%d, %d)", model.getMoveCount(), colorStr, i, j));
+        // addMove 如果成功，说明坐标没越界，且该位置没被下过
+        if (this.model.addMove(x, y)) {
+            String colorStr = this.model.isBlackTurn() ? "白方" : "黑方"; 
+            printLog("玩家 " + colorStr + " 下在了: (" + x + ", " + y + ")");
             
-            // 提交数据后立刻拉起底层扫描引擎，校验是否达成终止态（胜负已分）
-            if (model.checkWin(i, j)) {
-                boardPanel.repaint(); // 强制提交一帧重绘指令，确保终端棋子得以物理展示
-                handleWin(); // 切入结算分支
+            // 下完后查一下赢没赢
+            if (this.model.checkWin(x, y)) {
+                this.boardPanel.repaint(); // 刷新一遍画板把棋子显示出来
+                processWin(); 
             } else {
-                model.toggleTurn(); // 指令下发，交出写控制权
-                updateTurnUI();
-                boardPanel.repaint();
+                this.model.toggleTurn(); // 没赢就换下一个人的回合
+                updateTurnLabel();
+                this.boardPanel.repaint();
                 
-                // 如果在 PVE 模式下，随即调度 AI 后台运算接口
-                if (gameMode > 0 && !model.isGameOver()) {
-                    // 使用 javax.swing.Timer 进行时间节流操作
-                    // 模拟运算阻滞效果 (0.4秒)，优化拟人性并缓解 UI 线程的连续压力
-                    javax.swing.Timer timer = new javax.swing.Timer(400, e -> aiMove());
-                    timer.setRepeats(false); 
+                // PVE模式下轮到电脑走
+                if (this.gameMode > 0 && !this.model.isGameOver()) {
+                    // 重要说明：为什么要用 Timer 延迟一下？
+                    // 因为如果玩家一落子，电脑瞬间就落子，界面会看起来卡顿了一下。
+                    // 加上 400 毫秒的延迟，就像是电脑在思考一样，也能让界面有时间先把玩家的棋子画出来。
+                    Timer timer = new Timer(400, e -> letComputerPlay());
+                    timer.setRepeats(false); // 只执行一次
                     timer.start();
                 }
             }
@@ -194,135 +227,126 @@ public class GomokuGame extends JFrame implements BoardPanel.BoardClickListener 
     }
 
     /**
-     * AI 运算调度函数。
+     * 调用 AI 算下一步棋
      */
-    private void aiMove() {
-        if (model.isGameOver()) return;
-        Point bestMove = null;
+    private void letComputerPlay() {
+        if (this.model.isGameOver()) return;
         
-        // 获取配置环境状态并按需调用对应的 AI 内核级别
-        if (gameMode == 1) bestMove = aiPlayer.getEasyMove(model);
-        else if (gameMode == 2) bestMove = aiPlayer.getHardMove(model);
+        Point computerMove = null;
+        if (this.gameMode == 1) {
+            computerMove = this.aiPlayer.getEasyMove(this.model);
+        } else if (this.gameMode == 2) {
+            computerMove = this.aiPlayer.getHardMove(this.model);
+        }
         
-        if (bestMove != null) {
-            // 将 AI 推演出的最佳落子点推送到 Model 进行最终存盘
-            if (model.addMove(bestMove.x, bestMove.y)) {
-                addLog(String.format("[执行流水号 %02d] AI(机器侧)计算并落子: (%d, %d)", model.getMoveCount(), bestMove.x, bestMove.y));
-                if (model.checkWin(bestMove.x, bestMove.y)) {
-                    boardPanel.repaint();
-                    handleWin();
+        if (computerMove != null) {
+            if (this.model.addMove(computerMove.x, computerMove.y)) {
+                printLog("电脑白棋下在了: (" + computerMove.x + ", " + computerMove.y + ")");
+                
+                if (this.model.checkWin(computerMove.x, computerMove.y)) {
+                    this.boardPanel.repaint();
+                    processWin();
                 } else {
-                    model.toggleTurn();
-                    updateTurnUI();
-                    boardPanel.repaint();
+                    this.model.toggleTurn();
+                    updateTurnLabel();
+                    this.boardPanel.repaint();
                 }
             }
         }
     }
 
     /**
-     * 最终结算状态机的核心流转处理函数
+     * 有人获胜的处理逻辑
      */
-    private void handleWin() {
-        // 全局状态机锁定
-        model.setGameOver(true);
-        String winner = model.isBlackTurn() ? "黑方(玩家端)" : "白方(机器端)";
-        if (model.isBlackTurn()) blackWins++; else whiteWins++;
+    private void processWin() {
+        this.model.setGameOver(true);
+        String winnerText = "";
         
-        // 强更界面元素数据
-        blackScoreLabel.setText(String.valueOf(blackWins));
-        whiteScoreLabel.setText(String.valueOf(whiteWins));
-        
-        // 【关键步骤】系统调用 I/O 进行同步持久化，保证游戏状态即便面临异常断电也能完成记录
-        RecordManager.saveScores(blackWins, whiteWins);
-        
-        addLog("系统通告 >>> 胜负已分！" + winner + " 斩获最终胜利！");
-        statusLabel.setText(" 博弈终止 - " + winner + "判定为赢家 ");
-        
-        // 弹出最高优先级的阻塞式提示窗
-        JOptionPane.showMessageDialog(this, "博弈终止，" + winner + " 获得了压倒性胜利！", "系统对局结算", JOptionPane.INFORMATION_MESSAGE);
-    }
-
-    /**
-     * 控制台日志追加挂载函数，内置本地时间戳组装机制
-     */
-    private void addLog(String msg) {
-        String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
-        logArea.append("[" + time + "] " + msg + "\n");
-        // 控制游标，强制使得底层滚动条焦点对齐最新产生的行区
-        logArea.setCaretPosition(logArea.getDocument().getLength());
-    }
-
-    /**
-     * 辅助 UI 组件颜色渲染状态刷新
-     */
-    private void updateTurnUI() {
-        if (model.isBlackTurn()) {
-            currentTurnLabel.setText("指令等待：黑方回合");
-            currentTurnLabel.setForeground(Color.BLACK);
-            statusLabel.setText(" 当前状态：处于玩家输入监听...");
+        if (this.model.isBlackTurn()) {
+            winnerText = "黑方胜利！";
+            this.blackWins++;
+            this.blackScoreLabel.setText(String.valueOf(this.blackWins));
         } else {
-            currentTurnLabel.setText("指令等待：白方回合");
-            currentTurnLabel.setForeground(new Color(100, 100, 100)); 
-            statusLabel.setText(" 当前状态：处于机器推演状态...");
+            winnerText = "白方胜利！";
+            this.whiteWins++;
+            this.whiteScoreLabel.setText(String.valueOf(this.whiteWins));
+        }
+        
+        printLog("对局结束，" + winnerText);
+        this.statusLabel.setText(" " + winnerText);
+        
+        // 赢了之后，调用 C 同学的方法，把比分保存到本地硬盘里
+        RecordManager.saveScores(this.blackWins, this.whiteWins);
+        BoardExporter.exportBoardToTxt(this.model.getBoard(), this.model.getMoveCount(), winnerText);
+        
+        // 弹出一个信息对话框
+        JOptionPane.showMessageDialog(this, winnerText, "游戏结束", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void printLog(String message) {
+        String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
+        this.logArea.append("[" + time + "] " + message + "\n");
+        // 把光标移动到文本区最后，这样日志滚动条就会一直保持在最底部
+        this.logArea.setCaretPosition(this.logArea.getDocument().getLength());
+    }
+
+    private void updateTurnLabel() {
+        if (this.model.isBlackTurn()) {
+            this.currentTurnLabel.setText("轮到黑棋落子");
+            this.currentTurnLabel.setForeground(Color.BLACK);
+            this.statusLabel.setText(" 等待玩家操作...");
+        } else {
+            this.currentTurnLabel.setText("轮到白棋落子");
+            this.currentTurnLabel.setForeground(Color.RED);
+            this.statusLabel.setText(" 电脑思考中...");
         }
     }
 
-    private void resetGame() {
-        model.reset();
-        logArea.setText(""); 
-        addLog("系统日志 >>> 数据缓冲清空，系统完成硬重启");
-        updateTurnUI();
-        boardPanel.repaint();
+    private void restartGame() {
+        this.model.reset();
+        this.logArea.setText(""); 
+        printLog("点击了重开游戏按钮");
+        updateTurnLabel();
+        this.boardPanel.repaint();
     }
 
-    /**
-     * 单步回退系统 (回溯控制机制)
-     */
-    private void undoMove() {
-        if (model.isGameOver()) return;
-        if (model.getHistory().isEmpty()) {
-            JOptionPane.showMessageDialog(this, "系统异常拦截：堆栈内不存在任何合法落子记录指令！");
+    private void handleUndo() {
+        if (this.model.isGameOver()) return;
+        if (this.model.getHistory().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "棋盘上还没下子，无法悔棋！");
             return;
         }
         
-        // 复杂补偿运算：在 PVE 下发生回退时，如果仅退一步将导致将控制权重新交回 AI 而导致无限覆写，
-        // 因而需要采用跨步回溯机制，直接退回 2 个状态点到达上一周期的最初发起端。
-        int stepsToUndo = (gameMode > 0 && model.isBlackTurn() && model.getHistory().size() >= 2) ? 2 : 1;
-        for (int i = 0; i < stepsToUndo; i++) {
-            model.undoMove();
+        int stepsToUndo = 1;
+        // 如果是在跟电脑玩，要一次性撤销 2 步（电脑的一步和玩家的一步）。
+        // 否则你撤销一步，回合又跑到电脑那边，电脑又会瞬间下了一步把你堵死。
+        if (this.gameMode > 0 && this.model.isBlackTurn()) {
+            if (this.model.getHistory().size() >= 2) {
+                stepsToUndo = 2;
+            }
         }
-        addLog("指令回调 >>> 基于系统堆栈完成了 " + stepsToUndo + " 条落子事件撤回。");
-        updateTurnUI();
-        boardPanel.repaint();
+        
+        for (int i = 0; i < stepsToUndo; i++) {
+            this.model.undoMove();
+        }
+        
+        printLog("执行了悔棋操作，退了 " + stepsToUndo + " 步");
+        updateTurnLabel();
+        this.boardPanel.repaint(); // 必须重画棋盘，不然撤销的棋子还在界面上
     }
 
-    private void clearScores() {
-        blackWins = 0;
-        whiteWins = 0;
-        blackScoreLabel.setText("0");
-        whiteScoreLabel.setText("0");
-        // 下达抹除指令，将双0持久化至物理层面覆盖原始纪录
-        RecordManager.saveScores(0, 0); 
-        addLog("安全提示 >>> 全局物理级历史记录已完成深层格式化。");
-    }
-
-    /**
-     * Client Application Entry Point
-     * 程序的最终初始化入口点，规范化采用 Event Dispatch Thread (EDT) 防止因死锁诱发的 UI 无响应
-     */
     public static void main(String[] args) {
         try {
-            // 将 Java 的金属感 L&F(LookAndFeel) 配置覆写为底层宿主系统的原生窗体风格，带来现代化拟合观感
+            // 让 Java 窗口不要长得像十年前的界面，使用操作系统的自带 UI 主题
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception e) {
             e.printStackTrace();
         }
         
-        // 将顶层对象的创建压入安全队列
+        // invokeLater 是为了多线程安全，Java Swing 强制要求所有更新界面的操作都在事件分发线程里执行
         SwingUtilities.invokeLater(() -> {
-            GomokuGame game = new GomokuGame();
-            game.setVisible(true); // 使能句柄渲染可见
+            GomokuGame window = new GomokuGame();
+            window.setVisible(true); 
         });
     }
 }

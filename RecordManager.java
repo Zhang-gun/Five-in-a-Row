@@ -2,64 +2,107 @@ import java.io.*;
 import java.util.Properties;
 
 /**
- * 数据持久化管理类 (RecordManager)
- * 本类负责对接操作系统底层文件系统，实现关键数据的本地留存与读取。
- * 采用了 Java 核心库中的 Properties 类，将比分信息以键值对 (Key-Value) 的形式存入 properties 配置文件。
+ * 历史数据存储管理器
+ * 我们没有用复杂的数据库，因为作为课设来说太臃肿了。
+ * 而是采用了 Java 自带的 Properties 类，它专门用来读写键值对格式的配置文件。
  */
 public class RecordManager {
-    // 静态常量定义存储文件的相对路径及名称
-    private static final String RECORD_FILE = "score_record.properties";
+
+    // 保存比分的文件名，会生成在项目根目录
+    private static final String RECORD_FILE_NAME = "score_record.properties";
 
     /**
-     * 系统启动时调用此方法，尝试从本地文件系统中加载历史对战比分。
-     * 
-     * @return 长度为2的整型数组。索引0为黑方胜局数，索引1为白方胜局数。
+     * 读取本地保存的比分
      */
     public static int[] loadScores() {
-        int[] scores = new int[]{0, 0}; // 赋予初始默认比分 0:0
-        File file = new File(RECORD_FILE);
+        int[] scores = new int[2];
+        scores[0] = 0; // 黑方
+        scores[1] = 0; // 白方
         
-        // 校验文件有效性，若用户为首次运行且未产生过数据，则直接跳过读取步骤
-        if (file.exists()) {
-            // 使用 Java 7+ 引入的 try-with-resources 语法结构包裹 FileInputStream 流
-            // 其优势在于代码块执行完毕或抛出异常时，JVM 会自动确保底层流被 close()，有效防止系统文件句柄泄漏
-            try (InputStream in = new FileInputStream(file)) {
-                Properties props = new Properties();
-                // 解析输入流中的字符流文本，转化为内存中的键值对集合
-                props.load(in); 
-                
-                // 提取对应的键值，如果该键不存在，则返回默认字符串 "0"，随后强制转换为 Integer 类型
-                scores[0] = Integer.parseInt(props.getProperty("blackWins", "0"));
-                scores[1] = Integer.parseInt(props.getProperty("whiteWins", "0"));
-            } catch (Exception e) {
-                // 捕获可能出现的 IOException 并在控制台打印堆栈，防止由于单一文件错误导致主程序崩溃
-                e.printStackTrace();
+        File file = new File(RECORD_FILE_NAME);
+        
+        // 容错处理：如果文件不存在（第一次玩），就直接返回 0，千万别硬读，不然会报错。
+        if (!file.exists()) {
+            return scores;
+        }
+        
+        InputStream inStream = null;
+        try {
+            inStream = new FileInputStream(file);
+            
+            // Properties 类就像一个特殊的 Map，
+            // 它的好处是可以直接调用 load() 方法，把文件里通过等号连起来的配置解析进去。
+            Properties properties = new Properties();
+            properties.load(inStream);
+            
+            // 用 key 获取 value，第二个参数 "0" 的意思是，如果找不到这个 key，就默认返回 "0"
+            String blackStr = properties.getProperty("blackWins", "0");
+            String whiteStr = properties.getProperty("whiteWins", "0");
+            
+            // 字符串转成 int 数字
+            scores[0] = Integer.parseInt(blackStr);
+            scores[1] = Integer.parseInt(whiteStr);
+            
+        } catch (FileNotFoundException e) {
+            System.out.println("找不到配置文件");
+            e.printStackTrace();
+        } catch (IOException e) {
+            System.out.println("读取配置文件时出错");
+            e.printStackTrace();
+        } catch (NumberFormatException e) {
+            // 防御性编程：万一玩家无聊，自己打开文件把数字改成了字母 "abc"，
+            // 转换数字的时候就会报错，我们捕捉到这个错误就不管它，返回默认的 0 分。
+            System.out.println("文件里的数字被改坏了");
+            e.printStackTrace();
+        } finally {
+            // 【知识点】一定要在 finally 里面关闭流！
+            // 不然的话，无论代码正常跑完还是报错，这个文件都会被一直锁住，
+            // 别的程序想访问都访问不了，这叫内存泄漏。
+            if (inStream != null) {
+                try {
+                    inStream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
+        
         return scores;
     }
 
     /**
-     * 当任意一方获胜或用户主动点击“清空比分”时调用此方法。
-     * 负责将内存中最新的胜局数据序列化写入本地文件，覆盖原有数据。
-     * 
-     * @param blackWins 黑方累积胜局数
-     * @param whiteWins 白方累积胜局数
+     * 把新的比分保存进文件里
      */
     public static void saveScores(int blackWins, int whiteWins) {
-        // 同样采用 try-with-resources 安全地开启文件输出流
-        try (OutputStream out = new FileOutputStream(RECORD_FILE)) {
-            Properties props = new Properties();
+        OutputStream outStream = null;
+        
+        try {
+            // FileOutputStream 会自动帮我们创建一个文件，如果是覆盖写入就不加 true
+            outStream = new FileOutputStream(RECORD_FILE_NAME);
+            Properties properties = new Properties();
             
-            // 将基本数据类型转换为 String 并推入 Properties 集合
-            props.setProperty("blackWins", String.valueOf(blackWins));
-            props.setProperty("whiteWins", String.valueOf(whiteWins));
+            // Properties 存的必须是 String，所以要把数字转成字符串
+            properties.setProperty("blackWins", String.valueOf(blackWins));
+            properties.setProperty("whiteWins", String.valueOf(whiteWins));
             
-            // 调用 store 方法，系统会执行真正的磁盘 I/O 写入操作
-            // 第二个参数为插入到文件头部的英文注释说明，增加配置文件的可读性
-            props.store(out, "Gomoku Game Scores Record");
-        } catch (Exception e) {
+            // store() 是专门往外写文件的接口，第二个参数可以顺手在文件第一行加句英文注释
+            properties.store(outStream, "This file saves the Gomoku scores.");
+            
+        } catch (FileNotFoundException e) {
+            System.out.println("无法创建写入文件");
             e.printStackTrace();
+        } catch (IOException e) {
+            System.out.println("保存配置文件时出错");
+            e.printStackTrace();
+        } finally {
+            // 同样，最后一定要关掉流
+            if (outStream != null) {
+                try {
+                    outStream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
     }
 }
